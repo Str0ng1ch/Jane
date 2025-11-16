@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - rag-network
+
+  vectorizer:
+    build: ./vectorizer
+    volumes:
+      - ./data:/data
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    networks:
+      - rag-network
+    restart: "no"
+
+volumes:
+  qdrant_data:
+
+networks:
+  rag-network:
+    driver: bridge
