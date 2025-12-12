@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from typing import List
+from typing import List, Optional
 from dataclasses import dataclass
 import numpy as np
 import uuid
@@ -12,7 +12,25 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 
 @dataclass
 class QdrantConfig:
-    """Конфигурация подключения к Qdrant"""
+    """
+    Конфигурационные параметры для подключения к Qdrant векторной базе данных.
+
+    Attributes:
+        host (str): Хост сервера Qdrant. По умолчанию 'localhost' или значение
+                   из переменной окружения QDRANT_HOST.
+        port (int): Порт сервера Qdrant. По умолчанию 6333 или значение из
+                   переменной окружения QDRANT_PORT.
+        collection_name (str): Название коллекции для хранения векторов.
+                              По умолчанию 'documents' или значение из
+                              переменной окружения QDRANT_COLLECTION.
+        vector_size (int): Размерность векторов. По умолчанию 384 или значение
+                          из переменной окружения VECTOR_SIZE.
+        timeout (int): Таймаут подключения в секундах. По умолчанию 30 или
+                      значение из переменной окружения QDRANT_TIMEOUT.
+        max_retries (int): Максимальное количество попыток подключения.
+                          По умолчанию 3 или значение из переменной
+                          окружения MAX_RETRIES.
+    """
 
     host: str = os.getenv("QDRANT_HOST", "localhost")
     port: int = int(os.getenv("QDRANT_PORT", 6333))
@@ -22,13 +40,30 @@ class QdrantConfig:
     max_retries: int = int(os.getenv("MAX_RETRIES", 3))
 
 
-def setup_logging():
-    """Настройка логирования"""
+def setup_logging(log_level: str = "INFO") -> logging.Logger:
+    """
+    Настройка логирования для приложения.
+
+    Args:
+        log_level (str): Уровень логирования (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+            По умолчанию 'INFO'.
+
+    Returns:
+        logging.Logger: Настроенный логгер.
+    """
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    date_format = "%Y-%m-%d %H:%M:%S"
+
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        level=getattr(logging, log_level.upper()),
+        format=log_format,
+        datefmt=date_format,
+        handlers=[
+            logging.StreamHandler(),  # Вывод в консоль
+            logging.FileHandler("qdrant_operations.log"),  # Вывод в файл
+        ],
     )
+
     return logging.getLogger(__name__)
 
 
@@ -36,15 +71,53 @@ logger = setup_logging()
 
 
 class QdrantManager:
-    """Управление подключением и операциями с Qdrant"""
+    """
+    Менеджер для управления подключением и операциями с Qdrant.
 
-    def __init__(self, config: QdrantConfig):
+    Этот класс предоставляет методы для подключения к Qdrant, создания коллекций,
+    загрузки векторов и проверки целостности данных.
+
+    Attributes:
+        config (QdrantConfig): Конфигурация подключения.
+        client (Optional[QdrantClient]): Клиент для работы с Qdrant.
+
+    Example:
+        >>> config = QdrantConfig(host='localhost', port=6333)
+        >>> manager = QdrantManager(config)
+        >>> manager.init_collection()
+        >>> points = manager.create_test_batch(5)
+        >>> manager.upload_batch(points)
+        >>> manager.verify_upload(5)
+    """
+
+    def __init__(self, config: QdrantConfig) -> None:
+        """
+        Инициализирует QdrantManager с заданной конфигурацией.
+
+        Args:
+            config (QdrantConfig): Конфигурация для подключения к Qdrant.
+
+        Note:
+            Автоматически вызывает метод connect() для установки соединения.
+        """
         self.config = config
-        self.client = None
+        self.client: Optional[QdrantClient] = None
         self.connect()
 
     def connect(self) -> bool:
-        """Подключение к Qdrant с повторными попытками"""
+        """
+        Устанавливает подключение к серверу Qdrant с повторными попытками.
+
+        Returns:
+            bool: True если подключение установлено успешно, иначе False.
+
+        Raises:
+            ConnectionError: Если не удалось подключиться после всех попыток.
+
+        Note:
+            Использует экспоненциальную задержку между попытками.
+            Проверяет соединение через вызов get_collections().
+        """
         for attempt in range(self.config.max_retries):
             try:
                 self.client = QdrantClient(
@@ -56,7 +129,7 @@ class QdrantManager:
                 # Проверка соединения
                 self.client.get_collections()
                 logger.info(
-                    f"✅ Подключение к Qdrant {self.config.host}:{self.config.port} установлено"
+                    f"Подключение к Qdrant {self.config.host}:{self.config.port} установлено"
                 )
                 return True
 
@@ -68,12 +141,23 @@ class QdrantManager:
                     logger.error(
                         f"Не удалось подключиться после {self.config.max_retries} попыток"
                     )
-                    raise
+                    raise ConnectionError(f"Не удалось подключиться к Qdrant: {e}")
 
         return False
 
     def init_collection(self, recreate: bool = False) -> None:
-        """Инициализация коллекции"""
+        """
+        Инициализирует коллекцию в Qdrant.
+
+        Args:
+            recreate (bool): Если True, удаляет существующую коллекцию перед созданием.
+                           Если False, использует существующую коллекцию.
+                           По умолчанию False.
+
+        Note:
+            Создает коллекцию с косинусной метрикой расстояния и заданным размером вектора.
+            Если коллекция уже существует и recreate=False, просто логирует этот факт.
+        """
         try:
             if recreate:
                 logger.info(f"Удаление коллекции {self.config.collection_name}")
@@ -86,16 +170,25 @@ class QdrantManager:
             self.client.create_collection(
                 collection_name=self.config.collection_name,
                 vectors_config=VectorParams(
-                    size=self.config.vector_size, distance=Distance.COSINE
+                    size=self.config.vector_size,
+                    distance=Distance.COSINE,
                 ),
             )
             logger.info(f"Создана коллекция '{self.config.collection_name}'")
 
     def create_test_batch(self, batch_size: int = 5) -> List[PointStruct]:
-        """Создание тестового батча векторов"""
+        """
+        Создает батч тестовых векторов со случайными значениями.
+
+        Args:
+            batch_size (int): Количество векторов в батче. По умолчанию 5.
+
+        Returns:
+            List[PointStruct]: Список точек (векторов) для загрузки в Qdrant.
+        """
         logger.info(f"Создание тестового батча из {batch_size} векторов")
 
-        points = []
+        points: List[PointStruct] = []
         for i in range(batch_size):
             vector = np.random.randn(self.config.vector_size).tolist()
 
@@ -114,7 +207,18 @@ class QdrantManager:
         return points
 
     def upload_batch(self, points: List[PointStruct]) -> bool:
-        """Загрузка батча векторов в Qdrant"""
+        """
+        Загружает батч векторов в коллекцию Qdrant.
+
+        Args:
+            points (List[PointStruct]): Список точек для загрузки.
+
+        Returns:
+            bool: True если загрузка прошла успешно, иначе False.
+
+        Note:
+            Использует параметр wait=True для синхронной загрузки.
+        """
         try:
             self.client.upsert(
                 collection_name=self.config.collection_name, points=points, wait=True
@@ -126,7 +230,16 @@ class QdrantManager:
             return False
 
     def verify_upload(self, expected_min: int = 1) -> bool:
-        """Проверка загрузки данных"""
+        """
+        Проверяет, что данные были успешно загружены в коллекцию.
+
+        Args:
+            expected_min (int): Минимальное ожидаемое количество векторов в коллекции.
+                              По умолчанию 1.
+
+        Returns:
+            bool: True если количество векторов соответствует ожиданиям, иначе False.
+        """
         try:
             count_result = self.client.count(
                 collection_name=self.config.collection_name, exact=True
@@ -148,7 +261,12 @@ class QdrantManager:
             return False
 
     def health_check(self) -> bool:
-        """Проверка здоровья подключения"""
+        """
+        Проверяет доступность сервера Qdrant.
+
+        Returns:
+            bool: True если сервер доступен и отвечает, иначе False.
+        """
         try:
             self.client.get_collections()
             return True
@@ -156,8 +274,18 @@ class QdrantManager:
             return False
 
 
-def main():
-    """Основная функция"""
+def main() -> None:
+    """
+    Основная функция для демонстрации работы с Qdrant.
+
+    Выполняет следующие шаги:
+    1. Загружает конфигурацию из переменных окружения
+    2. Создает менеджер Qdrant
+    3. Проверяет доступность сервера
+    4. Инициализирует коллекцию
+    5. Создает и загружает тестовые векторы
+    6. Проверяет успешность загрузки
+    """
 
     config = QdrantConfig(
         host=os.getenv("QDRANT_HOST", "qdrant"),
@@ -170,7 +298,6 @@ def main():
 
     try:
         manager = QdrantManager(config)
-
         if not manager.health_check():
             logger.error("Qdrant недоступен")
             return
@@ -179,20 +306,25 @@ def main():
         test_points = manager.create_test_batch(batch_size=3)
 
         if manager.upload_batch(test_points):
-            logger.info("Тестовые данные загружены")
+            logger.info("Тестовые данные успешно загружены")
         else:
-            logger.error("Ошибка загрузки")
+            logger.error("Ошибка загрузки тестовых данных")
             return
 
-        # Проверка загрузки
+        # Верификация загрузки
         if manager.verify_upload(expected_min=len(test_points)):
             logger.info("Данные успешно верифицированы")
         else:
             logger.warning("Проблемы с верификацией данных")
 
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Ошибка: {e}", exc_info=True)
 
 
 if __name__ == "__main__":
+    """
+    Точка входа в приложение.
+
+    При прямом запуске скрипта вызывает основную функцию main().
+    """
     main()
