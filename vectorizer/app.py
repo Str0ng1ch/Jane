@@ -1,14 +1,13 @@
 import os
 import time
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
-from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
+from qdrant_client.models import Distance, VectorParams, PointStruct
 import numpy as np
+import uuid
 
 
 def wait_for_qdrant(host, port, timeout=30):
-    """Ждем пока Qdrant запустится"""
+    """Ожидание запуска Qdrant"""
     print(f"Ждем запуск Qdrant на {host}:{port}...")
     start_time = time.time()
     while time.time() - start_time < timeout:
@@ -24,8 +23,8 @@ def wait_for_qdrant(host, port, timeout=30):
 
 
 def init_qdrant(client):
-    """Инициализируем коллекцию в Qdrant"""
-    collection_name = "documents"
+    """Инициализация коллекции в Qdrant"""
+    collection_name = "test_documents"
 
     try:
         # Проверяем существующую коллекцию
@@ -35,107 +34,53 @@ def init_qdrant(client):
         # Создаем новую коллекцию
         client.create_collection(
             collection_name=collection_name,
-            vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
         )
         print(f"Создана коллекция '{collection_name}'")
 
 
-def process_pdf(file_path, client, model):
-    """Обрабатываем PDF и загружаем в Qdrant"""
-    print(f"Обрабатываем PDF: {file_path}")
+def create_test_vectors(num_vectors=5, vector_size=384):
+    """Создание тестовых векторов (нужно будет заменить на нормальные)"""
+    print(f"Создаем {num_vectors} тестовых векторов размером {vector_size}")
 
-    # Читаем PDF
-    reader = PdfReader(file_path)
-    text_chunks = []
+    vectors = []
+    for i in range(num_vectors):
+        vector = np.random.randn(vector_size).tolist()
 
-    # Извлекаем текст со всех страниц
-    for page_num, page in enumerate(reader.pages):
-        text = page.extract_text()
-        if text.strip():  # Если страница не пустая
-            # Просто разбиваем на чанки по предложениям (упрощенно)
-            sentences = [s.strip() for s in text.split('.') if s.strip()]
-            # Объединяем в чанки по 3-5 предложений
-            chunk_size = 3
-            for i in range(0, len(sentences), chunk_size):
-                chunk = '. '.join(sentences[i:i + chunk_size]) + '.'
-                text_chunks.append({
-                    'text': chunk,
-                    'source': os.path.basename(file_path),
-                    'page': page_num + 1,
-                    'chunk_id': len(text_chunks)
-                })
+        # Создание точку с тестовыми данными
+        point = PointStruct(
+            id=str(uuid.uuid4()),
+            vector=vector,
+            payload={
+                "text": f"Тестовый текст {i + 1}",
+                "source": "test_data",
+                "chunk_id": i,
+                "description": f"Это тестовая запись номер {i + 1} для проверки Qdrant",
+                "timestamp": time.time(),
+            },
+        )
+        vectors.append(point)
 
-    print(f"Извлечено {len(text_chunks)} текстовых чанков")
-
-    # Создаем эмбеддинги и загружаем в Qdrant
-    points = []
-    for chunk in text_chunks:
-        # Создаем эмбеддинг для текста
-        embedding = model.encode(chunk['text']).tolist()
-
-        # Создаем точку для Qdrant
-        point = {
-            'id': chunk['chunk_id'],
-            'vector': embedding,
-            'payload': chunk
-        }
-        points.append(point)
-
-    # Загружаем в Qdrant
-    client.upsert(
-        collection_name="documents",
-        points=points
-    )
-
-    print(f"Загружено {len(points)} векторов в Qdrant")
-    return len(points)
+    return vectors
 
 
 def main():
-    # Конфигурация
-    QDRANT_HOST = os.getenv('QDRANT_HOST', 'localhost')
-    QDRANT_PORT = int(os.getenv('QDRANT_PORT', 6333))
-    PDFS_DIR = '/data/pdfs'
+    """Основная функция - проверка работы Qdrant"""
+    QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
+    QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 
-    # Ждем пока Qdrant запустится
     wait_for_qdrant(QDRANT_HOST, QDRANT_PORT)
-
-    # Инициализируем клиент и модель
     client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-
-    # Инициализируем Qdrant
     init_qdrant(client)
 
-    # Обрабатываем все PDF файлы в директории
-    if not os.path.exists(PDFS_DIR):
-        print(f"Директория {PDFS_DIR} не существует")
-        return
+    # Добавление тестовых данных (нужно доработать для нормальных данных)
+    test_vectors = create_test_vectors(num_vectors=3, vector_size=384)
+    client.upsert(collection_name="test_documents", points=test_vectors, wait=True)
 
-    pdf_files = [f for f in os.listdir(PDFS_DIR) if f.endswith('.pdf')]
+    # Проверки, что данные записались
+    count_result = client.count(collection_name="test_documents", exact=True)
 
-    if not pdf_files:
-        print(f"В директории {PDFS_DIR} нет PDF файлов")
-        return
-
-    total_vectors = 0
-    for pdf_file in pdf_files:
-        pdf_path = os.path.join(PDFS_DIR, pdf_file)
-        try:
-            vectors_count = process_pdf(pdf_path, client, model)
-            total_vectors += vectors_count
-        except Exception as e:
-            print(f"Ошибка при обработке {pdf_file}: {e}")
-
-    print(f"\n✅ Готово! Всего загружено {total_vectors} векторов")
-
-    # Проверяем что данные есть
-    collections = client.get_collections()
-    print(f"\nДоступные коллекции: {[col.name for col in collections.collections]}")
-
-    # Показываем статистику коллекции
-    collection_info = client.get_collection("documents")
-    print(f"Коллекция 'documents': {collection_info.vectors_count} векторов")
+    print(f"Результат: {count_result.count} векторов записано")
 
 
 if __name__ == "__main__":
