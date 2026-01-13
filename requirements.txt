@@ -1,0 +1,37 @@
+# LLM and RAG
+llama-parse>=0.4.0
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+langchain-text-splitters>=0.3.0
+openai>=1.0.0
+mistralai>=1.0.0
+
+# RAG Evaluation
+ragas>=0.4.0
+langchain-mistralai>=1.0.0
+datasets>=2.0.0
+
+# Vector store
+qdrant-client>=1.6.9
+
+# Embeddings and ML
+numpy>=1.24.0
+
+# Web framework
+flask>=2.3.0
+
+# Telegram bot
+python-telegram-bot>=20.0
+
+# Document processing
+python-docx>=0.8.11
+
+# Environment and utilities
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+requests>=2.28.0
+tqdm>=4.65.0
+
+# Development
+ipykernel==7.1.0

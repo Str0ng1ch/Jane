@@ -1,30 +1,47 @@
-version: '3.8'
-
 services:
-  qdrant:
-    image: qdrant/qdrant:latest
+  backend:
+    build: .
+    command: python -m src.backend.backend
     ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    networks:
-      - rag-network
-
-  vectorizer:
-    build: ./vectorizer
-    volumes:
-      - ./data:/data
+      - "5001:5001"
     environment:
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
+      - DATA_DIR=/app/data
+      - QDRANT_PATH=/app/data/qdrant_local
+      - PARENT_CHUNKS_DIR=/app/data/chunks
+      - YC_API_KEY=${YC_API_KEY}
+      - YC_FOLDER_ID=${YC_FOLDER_ID}
+    volumes:
+      - ./data:/app/data
     networks:
-      - rag-network
-    restart: "no"
+      - jane_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
-volumes:
-  qdrant_data:
+  bot:
+    build: .
+    command: python -m src.backend.bot
+    environment:
+      - DATA_DIR=/app/data
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BACKEND_URL=http://backend:5001
+      - YC_API_KEY=${YC_API_KEY}
+      - YC_FOLDER_ID=${YC_FOLDER_ID}
+    volumes:
+      - ./data:/app/data
+    networks:
+      - jane_network
+    links:
+      - backend
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 networks:
-  rag-network:
+  jane_network:
     driver: bridge
