@@ -258,7 +258,7 @@ async def assist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "👩‍🏫 <b>Помощь преподавателю</b>\n\n"
         "📋 <b>Шаг 1 из 2: План урока</b> (опционально)\n\n"
         "Отправьте файл с планом урока (.txt или .docx), "
-        "чтобы я мог дать более точные рекомендации.\n\n"
+        "чтобы я могла дать более точные рекомендации.\n\n"
         "Или нажмите <b>Пропустить</b>, чтобы сразу задать вопрос.",
         reply_markup=reply_markup,
         parse_mode=ParseMode.HTML
@@ -766,7 +766,7 @@ async def handle_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                         )
                     else:
                         await update.message.reply_text(
-                            f"Я не смог сформулировать ответ. Попробуйте переформулировать вопрос.\n\n<i>Осталось вопросов: {remaining}</i>",
+                            f"Я не смогла сформулировать ответ. Попробуйте переформулировать вопрос.\n\n<i>Осталось вопросов: {remaining}</i>",
                             reply_markup=reply_markup,
                             parse_mode=ParseMode.HTML
                         )
@@ -930,7 +930,7 @@ async def handle_teacher_query(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
             else:
                 await update.message.reply_text(
-                    "Готово! Вы можете задать вопросы.",
+                    "Готова! Вы можете задать вопросы.",
                     reply_markup=reply_markup
                 )
             
