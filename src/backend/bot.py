@@ -1279,9 +1279,13 @@ def main() -> None:
     app.add_error_handler(error_handler)
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+        entry_points=[
+            CommandHandler('start', start),
+            CommandHandler('assist', assist),
+        ],
         states={
             MAIN_MENU: [
+                CommandHandler('assist', assist),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu),
                 MessageHandler(filters.Document.ALL, handle_incorrect_action),
             ],
@@ -1336,13 +1340,11 @@ def main() -> None:
         fallbacks=[
             CommandHandler('start', start),
             CommandHandler('cancel', cancel),
+            CommandHandler('assist', assist),
         ]
     )
 
     app.add_handler(conv_handler)
-    
-    # Добавляем обработчик команды /assist для преподавателей
-    app.add_handler(CommandHandler('assist', assist))
     
     logger.info("Бот запущен")
     app.run_polling()
