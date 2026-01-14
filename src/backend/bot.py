@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 # Состояния разговора
 (
     MAIN_MENU, 
-    WAITING_ASSIGNMENT,  # Ожидание задания от преподавателя (для эссе)
-    WAITING_ESSAY,  # Ожидание эссе
+    WAITING_ASSIGNMENT,  # Ожидание задания от преподавателя
+    WAITING_ESSAY,  # Ожидание работы студента
     WAITING_NIR,  # Ожидание НИР
     WAITING_NIR_QUERY,  # Ожидание запроса для НИР
     IN_DIALOG,  # Диалоговый режим
@@ -45,7 +45,7 @@ BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:5001')
 USER_DATA = {}
 
 # Константы для кнопок
-BTN_CHECK_ESSAY = '📝 Проверить эссе'
+BTN_CHECK_ESSAY = '📝 Проверить задание'
 BTN_CHECK_NIR = '📚 Проверить НИР'
 BTN_TEACHER_HELP = '👩‍🏫 Помощь преподавателю'
 BTN_ASK_QUESTION = '❓ Задать вопрос'
@@ -57,6 +57,13 @@ BTN_BACK = '◀️ Назад'
 
 # Лимит вопросов в диалоговой сессии
 MAX_DIALOG_QUESTIONS = 3
+
+# Лимиты обращений в день по типам работ
+DAILY_LIMITS = {
+    'essay': 3,
+    'nir': 3,
+    'teacher': 10,
+}
 
 # Пути к данным
 DATA_DIR = os.getenv('DATA_DIR', './data')
@@ -106,35 +113,65 @@ def _usage_file_path(user_id: int) -> str:
     return os.path.join(USAGE_DIR, f"{user_id}.json")
 
 
-def has_daily_quota(user_id: int) -> bool:
-    """Проверяет дневной лимит использования."""
+def has_daily_quota(user_id: int, work_type: str = "essay") -> bool:
+    """Проверяет дневной лимит использования для конкретного сценария.
+    
+    Args:
+        user_id: ID пользователя
+        work_type: Тип работы ("essay", "nir", "teacher")
+    
+    Returns:
+        True если лимит не исчерпан, False если исчерпан
+    """
     path = _usage_file_path(user_id)
+    limit = DAILY_LIMITS.get(work_type, 3)
+    
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if data.get("date") == _today_str() and int(data.get("count", 0)) >= 3:
+        
+        if data.get("date") != _today_str():
+            return True  # Новый день - лимит сброшен
+        
+        # Проверяем лимит для конкретного сценария
+        counts = data.get("counts", {})
+        if int(counts.get(work_type, 0)) >= limit:
             return False
         return True
     except Exception:
         return True
 
 
-def record_daily_use(user_id: int) -> None:
-    """Записывает использование."""
+def record_daily_use(user_id: int, work_type: str = "essay") -> None:
+    """Записывает использование для конкретного сценария.
+    
+    Args:
+        user_id: ID пользователя
+        work_type: Тип работы ("essay", "nir", "teacher")
+    """
     path = _usage_file_path(user_id)
     try:
-        current_count = 0
+        data = {}
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if data.get("date") == _today_str():
-                    current_count = int(data.get("count", 0))
         except:
             pass
         
-        payload = {"date": _today_str(), "count": current_count + 1}
+        # Если новый день - сбрасываем счётчики
+        if data.get("date") != _today_str():
+            data = {"date": _today_str(), "counts": {}}
+        
+        # Убедимся что counts существует
+        if "counts" not in data:
+            data["counts"] = {}
+        
+        # Увеличиваем счётчик для конкретного сценария
+        current_count = int(data["counts"].get(work_type, 0))
+        data["counts"][work_type] = current_count + 1
+        
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False)
+            json.dump(data, f, ensure_ascii=False)
     except Exception as e:
         logger.warning(f"Failed to persist usage for user {user_id}: {e}")
 
@@ -143,7 +180,6 @@ def get_main_menu_keyboard():
     """Главное меню."""
     return [
         [BTN_CHECK_ESSAY, BTN_CHECK_NIR],
-        [BTN_TEACHER_HELP],
         [BTN_RATE_BOT]
     ]
 
@@ -172,23 +208,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
     welcome_text = """
-Приветствую! 🏙
+Приветствую, дорогой урбанист! 🏙
 
-Я - Джейн, ваш AI-ассистент в мире городских исследований и образования.
+Я - Джейн, ваш AI-ассистент в мире городских исследований. Я помогу улучшить ваши работы, предоставляя конструктивные рекомендации на основе академических источников.
 
 <b>Что я умею:</b>
-• 📝 Проверять эссе с обратной связью
+• 📝 Проверять задания с обратной связью
 • 📚 Анализировать НИР (научно-исследовательские работы)
-• 👩‍🏫 Помогать преподавателям с подготовкой к занятиям
 • 💬 Вести диалог для уточнения рекомендаций
 
-<b>Для студентов:</b>
-Выберите тип работы, загрузите задание и получите рекомендации.
+<b>Как начать:</b>
+1️⃣ Выберите тип работы (Задание или НИР)
+2️⃣ Загрузите задание от преподавателя
+3️⃣ Отправьте свою работу и получите рекомендации
+4️⃣ Задавайте вопросы для уточнения
 
-<b>Для преподавателей:</b>
-Загрузите план урока (опционально) и задайте вопрос — я помогу с методикой!
-
-⚠️ Лимит: не более 3 проверок в день
+⚠️ Лимит: не более 3 проверок в день (для каждого типа работы)
 """
 
     await update.message.reply_text(
@@ -199,6 +234,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return MAIN_MENU
 
 
+async def assist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает команду /assist - помощь преподавателю."""
+    user_id = update.message.from_user.id
+    
+    context.user_data['work_type'] = 'teacher'
+    context.user_data['work_type_name'] = 'помощь преподавателю'
+    
+    # Проверяем лимит для преподавателя
+    if not has_daily_quota(user_id, work_type='teacher'):
+        keyboard = get_main_menu_keyboard()
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text(
+            "⚠️ Лимит запросов для преподавателя: не более 10 в день. Попробуйте завтра.",
+            reply_markup=reply_markup
+        )
+        return MAIN_MENU
+
+    skip_keyboard = [[BTN_SKIP], [BTN_CANCEL]]
+    reply_markup = ReplyKeyboardMarkup(skip_keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "👩‍🏫 <b>Помощь преподавателю</b>\n\n"
+        "📋 <b>Шаг 1 из 2: План урока</b> (опционально)\n\n"
+        "Отправьте файл с планом урока (.txt или .docx), "
+        "чтобы я мог дать более точные рекомендации.\n\n"
+        "Или нажмите <b>Пропустить</b>, чтобы сразу задать вопрос.",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.HTML
+    )
+    return WAITING_TEACHER_PLAN
+
+
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обрабатывает выбор в главном меню."""
     text = update.message.text
@@ -206,14 +273,14 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if text == BTN_CHECK_ESSAY:
         context.user_data['work_type'] = 'essay'
-        context.user_data['work_type_name'] = 'эссе'
+        context.user_data['work_type_name'] = 'задание'
         
-        # Проверяем лимит
-        if not has_daily_quota(user_id):
+        # Проверяем лимит для заданий
+        if not has_daily_quota(user_id, work_type='essay'):
             keyboard = get_main_menu_keyboard()
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             await update.message.reply_text(
-                "⚠️ Лимит: не более 3 проверок в день. Попробуйте завтра.",
+                "⚠️ Лимит проверок заданий: не более 3 в день. Попробуйте завтра.",
                 reply_markup=reply_markup
             )
             return MAIN_MENU
@@ -224,7 +291,7 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(
             "📋 <b>Шаг 1 из 2: Задание от преподавателя</b>\n\n"
             "Отправьте файл с заданием (.txt или .docx)\n\n"
-            "<i>Это поможет оценить эссе по критериям преподавателя.</i>",
+            "<i>Это поможет оценить вашу работу по критериям преподавателя.</i>",
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
@@ -234,12 +301,12 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data['work_type'] = 'nir'
         context.user_data['work_type_name'] = 'НИР'
         
-        # Проверяем лимит
-        if not has_daily_quota(user_id):
+        # Проверяем лимит для НИР
+        if not has_daily_quota(user_id, work_type='nir'):
             keyboard = get_main_menu_keyboard()
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             await update.message.reply_text(
-                "⚠️ Лимит: не более 3 проверок в день. Попробуйте завтра.",
+                "⚠️ Лимит проверок НИР: не более 3 в день. Попробуйте завтра.",
                 reply_markup=reply_markup
             )
             return MAIN_MENU
@@ -254,34 +321,6 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             parse_mode=ParseMode.HTML
         )
         return WAITING_NIR
-
-    elif text == BTN_TEACHER_HELP:
-        context.user_data['work_type'] = 'teacher'
-        context.user_data['work_type_name'] = 'помощь преподавателю'
-        
-        # Проверяем лимит
-        if not has_daily_quota(user_id):
-            keyboard = get_main_menu_keyboard()
-            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            await update.message.reply_text(
-                "⚠️ Лимит: не более 3 проверок в день. Попробуйте завтра.",
-                reply_markup=reply_markup
-            )
-            return MAIN_MENU
-
-        skip_keyboard = [[BTN_SKIP], [BTN_CANCEL]]
-        reply_markup = ReplyKeyboardMarkup(skip_keyboard, resize_keyboard=True)
-        
-        await update.message.reply_text(
-            "👩‍🏫 <b>Помощь преподавателю</b>\n\n"
-            "📋 <b>Шаг 1 из 2: План урока</b> (опционально)\n\n"
-            "Отправьте файл с планом урока (.txt или .docx), "
-            "чтобы я мог дать более точные рекомендации.\n\n"
-            "Или нажмите <b>Пропустить</b>, чтобы сразу задать вопрос.",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.HTML
-        )
-        return WAITING_TEACHER_PLAN
 
     elif text == BTN_RATE_BOT:
         rating_keyboard = [['1', '2', '3', '4', '5'], [BTN_CANCEL]]
@@ -304,7 +343,7 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def handle_assignment_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает загрузку задания от преподавателя для эссе."""
+    """Обрабатывает загрузку задания от преподавателя."""
     user_id = update.message.from_user.id
     
     if not update.message.document:
@@ -338,7 +377,7 @@ async def handle_assignment_document(update: Update, context: ContextTypes.DEFAU
             
             await update.message.reply_text(
                 f"✅ Задание получено: <b>{file_name}</b>\n\n"
-                "📤 <b>Шаг 2 из 2: Отправьте ваше эссе</b>\n\n"
+                "📤 <b>Шаг 2 из 2: Отправьте вашу работу</b>\n\n"
                 "Поддерживаемые форматы: .txt, .docx",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.HTML
@@ -355,7 +394,7 @@ async def handle_assignment_document(update: Update, context: ContextTypes.DEFAU
 
 
 async def handle_essay_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает загрузку эссе и возвращает обратную связь."""
+    """Обрабатывает загрузку задания и возвращает обратную связь."""
     user_id = update.message.from_user.id
 
     if not update.message.document:
@@ -375,7 +414,7 @@ async def handle_essay_document(update: Update, context: ContextTypes.DEFAULT_TY
         files = {'file': (file_name, file_bytes)}
         data = {'user_id': str(user_id), 'top_k': '5'}
 
-        await update.message.reply_text("⏳ Анализирую ваше эссе...")
+        await update.message.reply_text("⏳ Анализирую вашу работу...")
         
         response = requests.post(
             f"{BACKEND_URL}/analyze/essay",
@@ -388,7 +427,7 @@ async def handle_essay_document(update: Update, context: ContextTypes.DEFAULT_TY
             response_data = response.json()
             recommendation = response_data.get('recommendation', '')
 
-            # Для эссе - возвращаемся в главное меню
+            # Для задания - возвращаемся в главное меню
             keyboard = get_main_menu_keyboard()
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -409,7 +448,7 @@ async def handle_essay_document(update: Update, context: ContextTypes.DEFAULT_TY
                     reply_markup=reply_markup
                 )
 
-            record_daily_use(user_id)
+            record_daily_use(user_id, work_type='essay')
             return MAIN_MENU
 
         else:
@@ -576,7 +615,7 @@ async def handle_nir_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.pop('nir_file_name', None)
             context.user_data.pop('nir_file_ready', None)
             
-            record_daily_use(user_id)
+            record_daily_use(user_id, work_type='nir')
             return IN_DIALOG
         else:
             await update.message.reply_text("❌ Ошибка при анализе. Попробуйте ещё раз.")
@@ -935,7 +974,7 @@ async def handle_teacher_query(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data.pop('teacher_plan_bytes', None)
             context.user_data.pop('teacher_plan_name', None)
             
-            record_daily_use(user_id)
+            record_daily_use(user_id, work_type='teacher')
             return IN_TEACHER_DIALOG
         else:
             await update.message.reply_text("❌ Ошибка при обработке. Попробуйте ещё раз.")
@@ -1301,6 +1340,10 @@ def main() -> None:
     )
 
     app.add_handler(conv_handler)
+    
+    # Добавляем обработчик команды /assist для преподавателей
+    app.add_handler(CommandHandler('assist', assist))
+    
     logger.info("Бот запущен")
     app.run_polling()
 

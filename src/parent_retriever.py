@@ -131,9 +131,9 @@ class ParentDocumentRetriever:
                     # Use parent chunk
                     chunks.append({
                         "text": parent_text,
-                        "metadata": parent["metadata"],
-                        "score": result.score,
-                    })
+                    "metadata": parent["metadata"],
+                    "score": result.score,
+                })
             
             if len(chunks) >= top_k:
                 break
@@ -199,7 +199,7 @@ class ParentDocumentRetriever:
                 else:
                     combined_results.append({
                         "parent": {
-                            "text": parent_text,
+                                "text": parent_text,
                             "metadata": parent["metadata"],
                         },
                         "child": {
@@ -207,7 +207,7 @@ class ParentDocumentRetriever:
                             "metadata": result.metadata,
                         },
                         "score": result.score,
-                        "fallback_to_child": False,
+                            "fallback_to_child": False,
                     })
             
             if len(combined_results) >= top_k:

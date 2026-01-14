@@ -39,6 +39,32 @@ docker-compose down
 - `qdrant_local/` — векторная база данных
 - `chunks/` — parent chunks для retriever
 
+### 4. Экспорт загруженных работ из контейнера
+
+Все работы студентов сохраняются в контейнере в папке `/app/data/uploads/{user_id}/`. Чтобы скопировать их на хост:
+
+```bash
+# Скопировать все загруженные работы
+docker cp jane-bot:/app/data/uploads ./exported_uploads
+
+# Скопировать работы конкретного пользователя
+docker cp jane-bot:/app/data/uploads/299214811 ./user_299214811_uploads
+
+# Скопировать весь data/ (включая uploads, feedback, usage)
+docker cp jane-bot:/app/data ./exported_data
+```
+
+Структура папки `uploads`:
+```
+data/uploads/
+└── {user_id}/              # ID пользователя в Telegram
+    ├── assignment_essay.txt    # Задание от преподавателя (для заданий)
+    ├── assignment_nir.txt      # Задание (для НИР, опционально)
+    ├── 20260114_235959_abc123_essay.txt     # Работа студента
+    ├── 20260114_235959_abc123_essay_verdict.txt  # Обратная связь бота
+    └── 20260114_235959_abc123_essay_chunks.json  # Найденные источники
+```
+
 ---
 
 ## Локальная установка

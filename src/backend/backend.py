@@ -209,7 +209,7 @@ def assignment_status():
 
 @app.route('/analyze/essay', methods=['POST'])
 def analyze_essay():
-    """Анализирует эссе и возвращает рекомендации."""
+    """Анализирует задание и возвращает рекомендации."""
     return _analyze_work(work_type='essay')
 
 
@@ -226,7 +226,7 @@ def analyze_teacher():
 
 
 def _analyze_work(work_type: str):
-    """Общая логика анализа работы (эссе или НИР)."""
+    """Общая логика анализа работы (задание или НИР)."""
     if 'file' not in request.files:
         return jsonify({'error': 'no_file', 'message': 'Файл не был предоставлен'}), 400
 
@@ -237,7 +237,7 @@ def _analyze_work(work_type: str):
     # Получаем запрос пользователя (для НИР)
     user_query = request.form.get('user_query', '')
     
-    # Путь к заданию (только для эссе)
+    # Путь к заданию (только для заданий)
     assignment_path = get_assignment_path(user_id, work_type) if work_type != 'nir' else None
 
     # Проверка расширения файла
@@ -260,14 +260,14 @@ def _analyze_work(work_type: str):
         else:
             return jsonify({'error': 'unsupported_format', 'message': 'Неподдерживаемый формат файла'}), 400
 
-        # Для НИР используем только запрос студента, для эссе - задание
+        # Для НИР используем только запрос студента, для заданий - задание от преподавателя
         assignment_text = ""
         if work_type == 'nir':
             # Для НИР: только запрос студента
             if user_query:
                 assignment_text = f"ЗАПРОС СТУДЕНТА:\n{user_query}"
         else:
-            # Для эссе: читаем задание (опционально)
+            # Для заданий: читаем задание от преподавателя (опционально)
             if assignment_path and os.path.exists(assignment_path):
                 with open(assignment_path, 'r', encoding='utf-8') as f:
                     assignment_text = f.read()
@@ -432,7 +432,7 @@ def start_dialog():
         if user_query:
             assignment_text = f"ЗАПРОС СТУДЕНТА:\n{user_query}"
     else:
-        # Для эссе: читаем задание (опционально)
+        # Для заданий: читаем задание от преподавателя (опционально)
         assignment_path = get_assignment_path(user_id, work_type)
         if os.path.exists(assignment_path):
             with open(assignment_path, 'r', encoding='utf-8') as f:

@@ -705,9 +705,9 @@ def chunk_documents(
         else:
             # No chapter assigned
             chapter_key = "_no_chapter_"
-            if chapter_key not in chapters:
-                chapters[chapter_key] = []
-            chapters[chapter_key].append(page)
+        if chapter_key not in chapters:
+            chapters[chapter_key] = []
+        chapters[chapter_key].append(page)
     
     # Create child splitter
     child_splitter = RecursiveCharacterTextSplitter(
