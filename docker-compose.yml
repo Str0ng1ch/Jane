@@ -24,13 +24,15 @@ services:
 
   bot:
     build: .
-    command: python -m src.backend.bot
+    command: python -m src.backend.bot2
     environment:
       - DATA_DIR=/app/data
       - BOT_TOKEN=${BOT_TOKEN}
       - BACKEND_URL=http://backend:5001
       - YC_API_KEY=${YC_API_KEY}
       - YC_FOLDER_ID=${YC_FOLDER_ID}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - TEACHER_IDS=${TEACHER_IDS}
     volumes:
       - ./data:/app/data
     networks:
