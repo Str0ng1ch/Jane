@@ -262,7 +262,7 @@ def record_daily_use(user_id: int, work_type: str = "essay") -> None:
 
 
 def save_work_file(
-    user_id: int, file_bytes: bytes, file_name: str, work_type: str
+        user_id: int, file_bytes: bytes, file_name: str, work_type: str
 ) -> str:
     """Сохраняет файл работы на диск."""
     user_dir = os.path.join(WORKS_DIR, str(user_id))
@@ -513,8 +513,8 @@ def get_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 
 
 def get_dialog_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура для диалога - только завершение."""
     keyboard = [
-        [KeyboardButton(text=BTN_ASK_QUESTION)],
         [KeyboardButton(text=BTN_END_DIALOG)],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
@@ -577,7 +577,7 @@ def get_rating_keyboard() -> ReplyKeyboardMarkup:
 
 
 def get_works_list_keyboard(
-    works: List[Dict[str, Any]], page: int = 0, works_per_page: int = 5
+        works: List[Dict[str, Any]], page: int = 0, works_per_page: int = 5
 ) -> InlineKeyboardMarkup:
     """Создает инлайн-клавиатуру для списка работ."""
     builder = InlineKeyboardBuilder()
@@ -1130,9 +1130,9 @@ async def handle_download_work(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer_document(
             document,
             caption=f"📄 <b>{original_name}</b>\n"
-            f"👤 Пользователь: {work.get('user_id', 'Неизвестно')}\n"
-            f"📝 Тип: {work.get('work_type', 'Неизвестно')}\n"
-            f"📅 Дата: {work.get('date', 'Неизвестно')}",
+                    f"👤 Пользователь: {work.get('user_id', 'Неизвестно')}\n"
+                    f"📝 Тип: {work.get('work_type', 'Неизвестно')}\n"
+                    f"📅 Дата: {work.get('date', 'Неизвестно')}",
             parse_mode=ParseMode.HTML,
         )
         await callback.answer("✅ Файл отправлен")
@@ -1650,7 +1650,7 @@ async def handle_teacher_query(message: Message, state: FSMContext):
 
                 record_daily_use(user_id, work_type="teacher")
 
-                # Сохраняем данные для диалога
+                # Сохраняем данные для диалога (БЕЗ создания сессии сразу)
                 await state.update_data(
                     dialog_type="teacher",
                     session_data={
@@ -1660,7 +1660,16 @@ async def handle_teacher_query(message: Message, state: FSMContext):
                     },
                     dialog_questions_count=0,
                     last_recommendation=recommendation,
+                    dialog_session_id=None,  # Сессия создается при первом вопросе
                 )
+
+                # Используем обновленную клавиатуру диалога (без кнопки "Задать вопрос")
+                await message.answer(
+                    parts[-1] + "\n\n💬 Вы можете задать дополнительные вопросы или завершить диалог.",
+                    reply_markup=get_dialog_keyboard(),  # Теперь только кнопка завершения
+                    parse_mode=ParseMode.HTML,
+                )
+
                 await state.set_state(Form.IN_TEACHER_DIALOG)
 
             except json.JSONDecodeError as e:
@@ -1833,13 +1842,77 @@ async def handle_dialog(message: Message, state: FSMContext):
             )
 
 
+# ========== Обработчики диалога ==========
+async def _start_dialog_session(
+        user_id: int,
+        work_type: str,
+        work_text: str,
+        user_query: str,
+        initial_response: str,
+        session_data: Dict[str, Any]
+) -> Optional[str]:
+    """Создает сессию диалога на бэкенде и возвращает session_id."""
+    try:
+        # Подготавливаем данные для создания сессии
+        payload = {
+            "user_id": str(user_id),
+            "work_type": work_type,
+            "work_text": work_text,
+            "user_query": user_query,
+            "initial_response": initial_response,
+            "top_k": 5
+        }
+
+        # Для преподавателя добавляем план урока
+        if work_type == "teacher" and session_data.get("plan_content"):
+            plan_content = session_data.get("plan_content")
+            plan_name = session_data.get("plan_name", "plan.txt")
+
+            # Отправляем как файл
+            files = {"file": (plan_name, plan_content)}
+            response = requests.post(
+                f"{BACKEND_URL}/dialog/start",
+                files=files,
+                data=payload,
+                timeout=30
+            )
+        else:
+            response = requests.post(
+                f"{BACKEND_URL}/dialog/start",
+                json=payload,
+                timeout=30
+            )
+
+        if response.status_code == 200:
+            response_data = response.json()
+            return response_data.get("session_id")
+        else:
+            logger.error(f"Failed to start dialog session: {response.status_code} - {response.text}")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error starting dialog session: {e}")
+        return None
+
+
+# ========== Обработчики диалога ==========
 @router.message(Form.IN_TEACHER_DIALOG)
 async def handle_teacher_dialog(message: Message, state: FSMContext):
-    """Обрабатывает диалог с преподавателем."""
+    """Обрабатывает диалог с преподавателем - любой текст считается вопросом."""
     text = message.text
     user_id = message.from_user.id
 
     if text == BTN_END_DIALOG:
+        # Завершаем сессию на бэкенде
+        data = await state.get_data()
+        session_id = data.get("dialog_session_id")
+
+        if session_id:
+            try:
+                requests.post(f"{BACKEND_URL}/dialog/end", json={"session_id": session_id})
+            except:
+                pass
+
         await message.answer(
             "✅ Диалог завершен. Успехов в преподавании!\n\nЧем еще могу помочь?",
             reply_markup=get_main_menu_keyboard(user_id),
@@ -1847,116 +1920,151 @@ async def handle_teacher_dialog(message: Message, state: FSMContext):
         await state.set_state(Form.MAIN_MENU)
         return
 
-    elif text == BTN_ASK_QUESTION:
-        await message.answer("💭 Напишите ваш уточняющий вопрос.")
+    # Любой другой текст считается вопросом
+    data = await state.get_data()
+    questions_count = data.get("dialog_questions_count", 0)
+    session_id = data.get("dialog_session_id")
+
+    if questions_count >= MAX_DIALOG_QUESTIONS:
+        await message.answer(
+            f"⚠️ Достигнут лимит: {MAX_DIALOG_QUESTIONS} вопроса в диалоге.\n\n"
+            "Начните новый запрос для продолжения.",
+            reply_markup=get_main_menu_keyboard(user_id),
+        )
+        await state.set_state(Form.MAIN_MENU)
         return
 
-    else:
-        data = await state.get_data()
-        questions_count = data.get("dialog_questions_count", 0)
+    # Если нет сессии, пытаемся создать
+    if not session_id:
+        session_data = data.get("session_data", {})
+        initial_response = data.get("last_recommendation", "")
+        user_query = session_data.get("user_query", "")
 
-        if questions_count >= MAX_DIALOG_QUESTIONS:
+        # Для преподавателя work_text - это user_query
+        work_text = user_query
+
+        session_id = await _start_dialog_session(
+            user_id=user_id,
+            work_type="teacher",
+            work_text=work_text,
+            user_query=user_query,
+            initial_response=initial_response,
+            session_data=session_data
+        )
+
+        if not session_id:
             await message.answer(
-                f"⚠️ Достигнут лимит: {MAX_DIALOG_QUESTIONS} вопроса в диалоге.\n\n"
-                "Начните новый запрос для продолжения.",
+                "❌ Не удалось создать сессию диалога. Попробуйте начать заново.",
                 reply_markup=get_main_menu_keyboard(user_id),
             )
             await state.set_state(Form.MAIN_MENU)
             return
 
-        try:
-            await message.answer("⏳ Обрабатываю ваш вопрос...")
+        await state.update_data(dialog_session_id=session_id)
 
-            # Отправляем вопрос на бэкенд
-            session_data = data.get("session_data", {})
+    try:
+        await message.answer("⏳ Обрабатываю ваш вопрос...")
 
-            payload = {
-                "user_id": str(user_id),
-                "question": text,
-                "plan_content": session_data.get("plan_content", b"").decode(
-                    "utf-8", errors="ignore"
-                )
-                if session_data.get("plan_content")
-                else "",
-                "plan_name": session_data.get("plan_name", ""),
-                "user_query": session_data.get("user_query", ""),
-                "conversation_history": data.get("conversation_history", []),
-            }
+        # Отправляем вопрос на бэкенд
+        payload = {
+            "session_id": session_id,
+            "question": text
+        }
 
-            response = requests.post(
-                f"{BACKEND_URL}/dialog/teacher", json=payload, timeout=120
+        response = requests.post(
+            f"{BACKEND_URL}/dialog/ask",
+            json=payload,
+            timeout=120
+        )
+
+        if response.status_code == 200:
+            response_data = response.json()
+            answer = response_data.get("response", "")
+
+            if not answer:
+                answer = "Не удалось сформулировать ответ. Попробуйте переформулировать вопрос."
+
+            # Обновляем счетчик вопросов
+            await state.update_data(
+                dialog_questions_count=questions_count + 1,
             )
 
-            if response.status_code == 200:
-                try:
-                    response_data = response.json()
-                    if isinstance(response_data, dict):
-                        answer = response_data.get("response", "")
-                        conversation_history = response_data.get(
-                            "conversation_history", []
-                        )
-                    elif isinstance(response_data, str):
-                        answer = response_data
-                        conversation_history = []
-                    else:
-                        answer = str(response_data)
-                        conversation_history = []
+            remaining = MAX_DIALOG_QUESTIONS - questions_count - 1
 
-                    if not answer:
-                        answer = "Не удалось сформулировать ответ. Попробуйте переформулировать вопрос."
+            if remaining <= 0:
+                # Лимит вопросов исчерпан
+                # Разбиваем ответ на части если слишком длинный
+                answer_html = md_bold_to_html(answer)
+                parts = split_text_for_telegram(answer_html, max_len=4096)
 
-                    # Обновляем историю диалога
-                    await state.update_data(
-                        dialog_questions_count=questions_count + 1,
-                        conversation_history=conversation_history,
-                    )
-
-                    remaining = MAX_DIALOG_QUESTIONS - questions_count - 1
-
-                    if remaining <= 0:
+                if parts:
+                    for part in parts:
                         await message.answer(
-                            answer,
+                            part,
                             parse_mode=ParseMode.HTML,
-                            reply_markup=get_main_menu_keyboard(user_id),
                         )
-                        await message.answer(
-                            f"✅ Лимит вопросов ({MAX_DIALOG_QUESTIONS}) исчерпан. Диалог завершён.",
-                            reply_markup=get_main_menu_keyboard(user_id),
-                        )
-                        await state.set_state(Form.MAIN_MENU)
-                    else:
-                        answer_html = md_bold_to_html(answer)
-                        await message.answer(
-                            f"{answer_html}\n\n<i>Осталось вопросов: {remaining}</i>",
-                            parse_mode=ParseMode.HTML,
-                            reply_markup=get_dialog_keyboard(),
-                        )
-
-                except json.JSONDecodeError as e:
-                    logger.error(
-                        f"Failed to parse JSON response in teacher dialog: {e}"
-                    )
+                else:
                     await message.answer(
-                        "❌ Ошибка при обработке ответа. Попробуйте ещё раз.",
+                        answer_html,
+                        parse_mode=ParseMode.HTML,
+                    )
+
+                await message.answer(
+                    f"✅ Лимит вопросов ({MAX_DIALOG_QUESTIONS}) исчерпан. Диалог завершён.",
+                    reply_markup=get_main_menu_keyboard(user_id),
+                )
+                await state.set_state(Form.MAIN_MENU)
+            else:
+                # Еще есть вопросы
+                answer_html = md_bold_to_html(answer)
+                parts = split_text_for_telegram(answer_html, max_len=4096)
+
+                if parts:
+                    # Отправляем все части кроме последней
+                    for part in parts[:-1]:
+                        await message.answer(
+                            part,
+                            parse_mode=ParseMode.HTML,
+                        )
+                    # Последнюю часть отправляем с информацией о количестве оставшихся вопросов
+                    last_part = f"{parts[-1]}\n\n<i>Осталось вопросов: {remaining}</i>"
+                    await message.answer(
+                        last_part,
+                        parse_mode=ParseMode.HTML,
                         reply_markup=get_dialog_keyboard(),
                     )
+                else:
+                    await message.answer(
+                        f"{answer_html}\n\n<i>Осталось вопросов: {remaining}</i>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_dialog_keyboard(),
+                    )
+
+        else:
+            logger.error(f"Dialog ask error: {response.status_code} - {response.text}")
+            if response.status_code == 404:
+                await message.answer(
+                    "❌ Функция диалога временно недоступна. Пожалуйста, начните новый запрос.",
+                    reply_markup=get_main_menu_keyboard(user_id),
+                )
+                await state.set_state(Form.MAIN_MENU)
             else:
                 await message.answer(
-                    "❌ Ошибка при обработке вопроса. Попробуйте ещё раз.",
+                    f"❌ Ошибка при обработке вопроса (код {response.status_code}). Попробуйте ещё раз.",
                     reply_markup=get_dialog_keyboard(),
                 )
 
-        except requests.exceptions.Timeout:
-            await message.answer(
-                "⏰ Превышено время ожидания. Попробуйте ещё раз.",
-                reply_markup=get_dialog_keyboard(),
-            )
-        except Exception as e:
-            logger.error(f"Error in teacher dialog: {e}")
-            await message.answer(
-                "❌ Произошла ошибка. Попробуйте ещё раз.",
-                reply_markup=get_dialog_keyboard(),
-            )
+    except requests.exceptions.Timeout:
+        await message.answer(
+            "⏰ Превышено время ожидания. Попробуйте ещё раз.",
+            reply_markup=get_dialog_keyboard(),
+        )
+    except Exception as e:
+        logger.error(f"Error in teacher dialog: {e}")
+        await message.answer(
+            "❌ Произошла внутренняя ошибка. Попробуйте ещё раз.",
+            reply_markup=get_dialog_keyboard(),
+        )
 
 
 # ========== Утилиты ==========
